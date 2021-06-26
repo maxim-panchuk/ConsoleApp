@@ -15,6 +15,9 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 // Класс для работы с коллекцией в памяти
 public class MovieCollectionManager {
@@ -26,6 +29,7 @@ public class MovieCollectionManager {
     public Map<String, String> users;                                   // Пользователи
     public PriorityQueue<Movie> dataSet;                                // Объекты коллекции
     public Map<String, ArrayList<Integer>> owners;                      // Наличность пользователя
+    ReadWriteLock lock = new ReentrantReadWriteLock();
 
     public MovieCollectionManager() throws SQLException {
         this.users = setUsers();
@@ -172,11 +176,6 @@ public class MovieCollectionManager {
     //==========================================================================================================================================================================
 
     public String insertMovieToDb (Message message) {
-        try {
-            Thread.sleep(10000);
-        } catch (InterruptedException e) {
-            System.out.println(e.getMessage());
-        }
 
         try {
             GsonBuilder gsonBuilder = new GsonBuilder();
@@ -198,8 +197,9 @@ public class MovieCollectionManager {
             return "Ошибка обращения к БД";
         }
     }
-
+    ////--------------------
     private String insertMovieToCollection (String convertedMovie) {
+        lock.writeLock().lock();
         try {
             GsonBuilder gsonBuilder = new GsonBuilder();
             Gson gson = gsonBuilder.create();
@@ -224,49 +224,56 @@ public class MovieCollectionManager {
         } catch (SQLException e) {
             System.out.println(e.getMessage());
             return "Ошибка обращения к БД";
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 
     public String deleteMovieById (Message message) {
-        User user = message.getUser();
-        String login = user.getLogin();
-        String arguments = message.getArgument();
-        int Id = Integer.parseInt((arguments.trim().split(" "))[0]);
-        if (owners.containsKey(login)) {
-            if (loginHasMovie(message)) {
-                Iterator<Movie> movieIterator = dataSet.iterator();
-                Movie movie;
-                while (movieIterator.hasNext()) {
-                    movie = movieIterator.next();
-                    if (movie.getId() == Id) {
-                        try {
-                            dataSet.remove(movie);
-                            ArrayList<Integer> ids = owners.get(login);
-                            for (int i = 0; i < ids.size(); i++) {
-                                if (ids.get(i) == Id) {
-                                    owners.get(login).remove(i);
+        lock.writeLock().lock();
+        try {
+            User user = message.getUser();
+            String login = user.getLogin();
+            String arguments = message.getArgument();
+            int Id = Integer.parseInt((arguments.trim().split(" "))[0]);
+            if (owners.containsKey(login)) {
+                if (loginHasMovie(message)) {
+                    Iterator<Movie> movieIterator = dataSet.iterator();
+                    Movie movie;
+                    while (movieIterator.hasNext()) {
+                        movie = movieIterator.next();
+                        if (movie.getId() == Id) {
+                            try {
+                                dataSet.remove(movie);
+                                ArrayList<Integer> ids = owners.get(login);
+                                for (int i = 0; i < ids.size(); i++) {
+                                    if (ids.get(i) == Id) {
+                                        owners.get(login).remove(i);
+                                    }
                                 }
+                                PreparedStatement preparedStatement = connection.prepareStatement(
+                                        "DELETE FROM movie_table WHERE movie_id = ?"
+                                );
+                                preparedStatement.setInt(1, Id);
+                                preparedStatement.executeUpdate();
+                                preparedStatement.close();
+                                return "Элемент успешно удален";
+                            } catch (SQLException e) {
+                                System.out.println(e.getMessage());
+                                return "Возникла ошибка при обращении к БД";
                             }
-                            PreparedStatement preparedStatement = connection.prepareStatement(
-                                    "DELETE FROM movie_table WHERE movie_id = ?"
-                            );
-                            preparedStatement.setInt(1, Id);
-                            preparedStatement.executeUpdate();
-                            preparedStatement.close();
-                            return "Элемент успешно удален";
-                        } catch (SQLException e) {
-                            System.out.println(e.getMessage());
-                            return "Возникла ошибка при обращении к БД";
                         }
                     }
-                }
-                return "Такого элемента нет в коллекции";
-            } else {
+                    return "Такого элемента нет в коллекции";
+                } else {
 
-                return "Текущий пользователь не может работать с этим элементом \n" +
-                        "Доступные вам элементы: " + owners.get(login).toString();
-            }
-        } return "У вас еще нет ни одного элемента";
+                    return "Текущий пользователь не может работать с этим элементом \n" +
+                            "Доступные вам элементы: " + owners.get(login).toString();
+                }
+            } return "У вас еще нет ни одного элемента";
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
 
@@ -280,103 +287,121 @@ public class MovieCollectionManager {
 
 
     public String clear (Message message) {
-        User user = message.getUser();
-        String login = user.getLogin();
-        if (owners.containsKey(login)) {
-            ArrayList<Integer> ownerMovies = owners.get(login);
-            Iterator<Movie> movieIterator = dataSet.iterator();
-            while (movieIterator.hasNext()) {
-                Movie movie = movieIterator.next();
-                try {
-                    for (Integer ownerMovie : ownerMovies) {
-                        if (movie.getId().equals(ownerMovie)) {
-                            movieIterator.remove();
+        lock
+                .writeLock()
+                .lock();
+        try {
+            User user = message.getUser();
+            String login = user.getLogin();
+            if (owners.containsKey(login)) {
+                ArrayList<Integer> ownerMovies = owners.get(login);
+                Iterator<Movie> movieIterator = dataSet.iterator();
+                while (movieIterator.hasNext()) {
+                    Movie movie = movieIterator.next();
+                    try {
+                        for (Integer ownerMovie : ownerMovies) {
+                            if (movie.getId().equals(ownerMovie)) {
+                                movieIterator.remove();
+                            }
                         }
+                    } catch (NullPointerException e) {
+                        return "Ваших элементов в базе данных нет";
                     }
-                } catch (NullPointerException e) {
-                    return "Ваших элементов в базе данных нет";
+
                 }
-
-            }
-            try {
-                PreparedStatement preparedStatement = connection.prepareStatement(
-                        "DELETE FROM movie_table WHERE login = ?"
-                );
-                preparedStatement.setString(1, login);
-                preparedStatement.executeUpdate();
-                preparedStatement.close();
-                owners.get(login).clear();
-                return "Все ваши элементы успешно удалены";
-            } catch (SQLException e) {
-                System.out.println(e.getMessage());
-                return "Ошибка обращения к БД";
-            }
-        } return "Ваша коллекция пуста";
-
-    }
-
-    public String updateElement(Message message) {
-        User user = message.getUser();
-        String login = user.getLogin();
-        Movie movie = message.getMovie();
-        String argument = message.getArgument();
-        int id = Integer.parseInt(argument);
-        if (owners.containsKey(login)) {
-            if (loginHasMovie(message)) {
-                Movie movieToUpdate = null;
-                for (Movie mov : dataSet) {
-                    if (mov.getId().equals(id)) {
-                        movieToUpdate = mov;
-                        break;
-                    }
-                }
-                dataSet.remove(movieToUpdate);
-                movie.setId(id);
-                dataSet.add(movie);
                 try {
-                    GsonBuilder gsonBuilder = new GsonBuilder();
-                    Gson gson = gsonBuilder.create();
-                    String jsonedMovie = gson.toJson(movie);
                     PreparedStatement preparedStatement = connection.prepareStatement(
-                            "UPDATE movie_table SET element=? WHERE movie_id=?"
+                            "DELETE FROM movie_table WHERE login = ?"
                     );
-                    preparedStatement.setString(1, jsonedMovie);
-                    preparedStatement.setInt(2, id);
+                    preparedStatement.setString(1, login);
                     preparedStatement.executeUpdate();
                     preparedStatement.close();
+                    owners.get(login).clear();
+                    return "Все ваши элементы успешно удалены";
                 } catch (SQLException e) {
                     System.out.println(e.getMessage());
                     return "Ошибка обращения к БД";
                 }
-                return "Элемент успешно обновлен";
-            }
-            return "Текущий пользователь не может работать с этим элементом \n" +
-                    "Доступные вам элементы: " + owners.get(login).toString();
-        } return "У вас еще нет ни одного элемента";
+            } return "Ваша коллекция пуста";
+        } finally {
+            lock.writeLock().unlock();
+        }
+
+
     }
 
-    public String deleteGreater (Message message) { ;
-        int id = Integer.parseInt(message.getArgument());
-        User user = message.getUser();
-        String login = user.getLogin();
+    public String updateElement(Message message) {
+        lock.writeLock().lock();
+        try {
+            User user = message.getUser();
+            String login = user.getLogin();
+            Movie movie = message.getMovie();
+            String argument = message.getArgument();
+            int id = Integer.parseInt(argument);
+            if (owners.containsKey(login)) {
+                if (loginHasMovie(message)) {
+                    Movie movieToUpdate = null;
+                    for (Movie mov : dataSet) {
+                        if (mov.getId().equals(id)) {
+                            movieToUpdate = mov;
+                            break;
+                        }
+                    }
+                    dataSet.remove(movieToUpdate);
+                    movie.setId(id);
+                    dataSet.add(movie);
+                    try {
+                        GsonBuilder gsonBuilder = new GsonBuilder();
+                        Gson gson = gsonBuilder.create();
+                        String jsonedMovie = gson.toJson(movie);
+                        PreparedStatement preparedStatement = connection.prepareStatement(
+                                "UPDATE movie_table SET element=? WHERE movie_id=?"
+                        );
+                        preparedStatement.setString(1, jsonedMovie);
+                        preparedStatement.setInt(2, id);
+                        preparedStatement.executeUpdate();
+                        preparedStatement.close();
+                    } catch (SQLException e) {
+                        System.out.println(e.getMessage());
+                        return "Ошибка обращения к БД";
+                    }
+                    return "Элемент успешно обновлен";
+                }
+                return "Текущий пользователь не может работать с этим элементом \n" +
+                        "Доступные вам элементы: " + owners.get(login).toString();
+            } return "У вас еще нет ни одного элемента";
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
 
-        if (moreIds(message)) {
-            ArrayList<Integer> idsToDelete = owners.get(login);
-            owners.get(login).removeIf(idd -> idd > id);
-            dataSet.removeIf(mov -> mov.getId() > id && idsToDelete.contains(mov.getId()));
-            try {
-                PreparedStatement preparedStatement = connection.prepareStatement(
-                        "DELETE FROM movie_table WHERE movie_id > ? AND login = ?"
-                );
-                preparedStatement.setInt(1, id);
-                preparedStatement.setString(2, login);
-                preparedStatement.executeUpdate();
-                preparedStatement.close();
-            } catch (SQLException e) {
-                System.out.println(e.getMessage());
-            }
-        } else return "В вашем распоряжении нет элементов, с id больше, чем " + id;
-        return "Элементы, с id большие, чем " + id + " успешно удалены";
+    public String deleteGreater (Message message) {
+        lock.writeLock().lock();
+        try {
+            int id = Integer.parseInt(message.getArgument());
+            User user = message.getUser();
+            String login = user.getLogin();
+
+            if (moreIds(message)) {
+                ArrayList<Integer> idsToDelete = owners.get(login);
+                dataSet.removeIf(mov -> mov.getId() > id && idsToDelete.contains(mov.getId()));
+                owners.get(login).removeIf(idd -> idd > id);
+                try {
+                    PreparedStatement preparedStatement = connection.prepareStatement(
+                            "DELETE FROM movie_table WHERE movie_id > ? AND login = ?"
+                    );
+                    preparedStatement.setInt(1, id);
+                    preparedStatement.setString(2, login);
+                    preparedStatement.executeUpdate();
+                    preparedStatement.close();
+                } catch (SQLException e) {
+                    System.out.println(e.getMessage());
+                }
+            } else return "В вашем распоряжении нет элементов, с id больше, чем " + id;
+            return "Элементы, с id большие, чем " + id + " успешно удалены";
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
     //==========================================================================================================================================================================
 
@@ -396,117 +421,153 @@ public class MovieCollectionManager {
     }
 
     public String deleteHead (Message message) {
-        String login = message.getUser().getLogin();
-        if (owners.containsKey(login)) {
-            ArrayList<Integer> ids = owners.get(login);
-            int minId = 99999;
-            for (Integer id : ids) {
-                if (id < minId) {
-                    minId = id;
-                }
-            }
-            Iterator<Movie> movieIterator = dataSet.iterator();
-            Movie movie;
-            while (movieIterator.hasNext()) {
-                movie = movieIterator.next();
-                if (movie.getId() == minId) {
-                    try {
-                        for (int i = 0; i < ids.size(); i++) {
-                            if (ids.get(i) == minId) {
-                                owners.get(login).remove(i);
-                            }
-                        }
-                        PreparedStatement preparedStatement = connection.prepareStatement(
-                                "DELETE FROM movie_table WHERE movie_id = ?"
-                        );
-                        preparedStatement.setInt(1, minId);
-                        preparedStatement.executeUpdate();
-                        preparedStatement.close();
-                        return "Элемент успешно удален";
-                    } catch (SQLException e) {
-                        System.out.println(e.getMessage());
-                        return "Возникла ошибка при обращении к БД";
+        lock.writeLock().lock();
+        try {
+            String login = message.getUser().getLogin();
+            if (owners.containsKey(login)) {
+                ArrayList<Integer> ids = owners.get(login);
+                int minId = 99999;
+                for (Integer id : ids) {
+                    if (id < minId) {
+                        minId = id;
                     }
                 }
-            }
-            return "Такого элемента нет в коллекции";
-        } return "Ваша коллекция пуста";
+                Iterator<Movie> movieIterator = dataSet.iterator();
+                Movie movie;
+                while (movieIterator.hasNext()) {
+                    movie = movieIterator.next();
+                    if (movie.getId() == minId) {
+                        try {
+                            for (int i = 0; i < ids.size(); i++) {
+                                if (ids.get(i) == minId) {
+                                    owners.get(login).remove(i);
+                                }
+                            }
+                            PreparedStatement preparedStatement = connection.prepareStatement(
+                                    "DELETE FROM movie_table WHERE movie_id = ?"
+                            );
+                            preparedStatement.setInt(1, minId);
+                            preparedStatement.executeUpdate();
+                            preparedStatement.close();
+                            return "Элемент успешно удален";
+                        } catch (SQLException e) {
+                            System.out.println(e.getMessage());
+                            return "Возникла ошибка при обращении к БД";
+                        }
+                    }
+                }
+                return "Такого элемента нет в коллекции";
+            } return "Ваша коллекция пуста";
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     public String insertIfMin(Message message) {
-        Movie newMovie = message.getMovie();
-        for (Movie movie : dataSet) {
-            if (movie.getName().length() < newMovie.getName().length()) {
-                return "Ваш элемент не является минимальным";
+        lock.writeLock().lock();
+        try {
+            Movie newMovie = message.getMovie();
+            for (Movie movie : dataSet) {
+                if (movie.getName().length() < newMovie.getName().length()) {
+                    return "Ваш элемент не является минимальным";
+                }
             }
+            this.insertMovieToDb(message);
+            return "Элемент успешно добавлен";
+        } finally {
+            lock.writeLock().unlock();
         }
-        this.insertMovieToDb(message);
-        return "Элемент успешно добавлен";
-    }
-
-    public void executeScript(Message message) {
 
     }
 
     public String outInfo() {
-        return "Database init time: " + creationDate + "\n" +
-                "Amount of elements: " + dataSet.size() + "\n" +
-                "Collection type:    " + dataSet.getClass().getSimpleName();
+        lock.readLock().lock();
+        try {
+            return "Database init time: " + creationDate + "\n" +
+                    "Amount of elements: " + dataSet.size() + "\n" +
+                    "Collection type:    " + dataSet.getClass().getSimpleName();
+        } finally {
+            lock.readLock().unlock();
+        }
+
     }
 
     public String show() {
-        return defineAnswer(dataSet);
+        lock.readLock().lock();
+        try {
+            return defineAnswer(dataSet);
+        } finally {
+            lock.readLock().unlock();
+        }
+
+
     }
 
     public String printAscending () {
-        ArrayList<Integer> list = new ArrayList<>();
-        dataSet.forEach(movie -> list.add(movie.getId()));
-        class MovieComparator implements Comparator<Integer> {
-            @Override
-            public int compare(Integer id1, Integer id2) {
-                return id1.compareTo(id2);
-            }
-        }
-
-        PriorityQueue<Movie> arr = new PriorityQueue<>();
-        Collections.sort(list);
-        Collections.reverse(list);
-        for (Integer id : list) {
-            for (Movie movie : dataSet) {
-                if (id.equals(movie.getId())) {
-                    arr.add(movie);
+        lock.readLock().lock();
+        try {
+            ArrayList<Integer> list = new ArrayList<>();
+            dataSet.forEach(movie -> list.add(movie.getId()));
+            class MovieComparator implements Comparator<Integer> {
+                @Override
+                public int compare(Integer id1, Integer id2) {
+                    return id1.compareTo(id2);
                 }
             }
+
+            PriorityQueue<Movie> arr = new PriorityQueue<>();
+            Collections.sort(list);
+            Collections.reverse(list);
+            for (Integer id : list) {
+                for (Movie movie : dataSet) {
+                    if (id.equals(movie.getId())) {
+                        arr.add(movie);
+                    }
+                }
+            }
+            return defineAnswer(arr);
+        } finally {
+            lock.readLock().unlock();
         }
-        return defineAnswer(arr);
     }
 
     public String printAscendingDirector () {
-        ArrayList<Person> dirNames = new ArrayList<>();
-        dataSet.forEach(movie -> dirNames.add(movie.getDirector()));
-        class DirNamesComparator implements Comparator<Person> {
-            @Override
-            public int compare (Person dirName1, Person dirName2) {
-                return dirName1.getName().length() - dirName2.getName().length();
+        lock.readLock().lock();
+        try {
+            ArrayList<Person> dirNames = new ArrayList<>();
+            dataSet.forEach(movie -> dirNames.add(movie.getDirector()));
+            class DirNamesComparator implements Comparator<Person> {
+                @Override
+                public int compare (Person dirName1, Person dirName2) {
+                    return dirName1.getName().length() - dirName2.getName().length();
+                }
             }
+            Comparator<Person> comparator = new DirNamesComparator();
+            dirNames.sort(comparator);
+            ArrayList<String> arr = new ArrayList<>();
+            for (Person name : dirNames) {
+                arr.add(name.getName());
+            }
+            return Arrays.toString(arr.toArray());
+        } finally {
+            lock.readLock().unlock();
         }
-        Comparator<Person> comparator = new DirNamesComparator();
-        dirNames.sort(comparator);
-        ArrayList<String> arr = new ArrayList<>();
-        for (Person name : dirNames) {
-            arr.add(name.getName());
-        }
-        return Arrays.toString(arr.toArray());
     }
 
     public String nameFilter (String regex) {
-        ArrayList<String> arr = new ArrayList<>();
-        for (Movie movie : dataSet) {
-            if (movie.getName().contains(regex)) {
-                arr.add(movie.toString());
+        lock.readLock().lock();
+        try {
+            ArrayList<String> arr = new ArrayList<>();
+            for (Movie movie : dataSet) {
+                if (movie.getName().contains(regex)) {
+                    arr.add(movie.toString());
+                }
             }
+            return Arrays.toString(arr.toArray());
+        } finally {
+            lock.readLock().unlock();
         }
-        return Arrays.toString(arr.toArray());
+
     }
 
     public String help () {
@@ -535,7 +596,7 @@ public class MovieCollectionManager {
         }
         return Arrays.toString(answer.toArray());
     }
-
+    ///--------------------------
 
     public static void sout_users () {
         try {

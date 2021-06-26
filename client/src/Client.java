@@ -1,6 +1,7 @@
 import element.User;
 
 import java.io.*;
+import java.net.ConnectException;
 import java.net.Socket;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
@@ -26,7 +27,13 @@ public class Client {
         System.out.println("Клиент начал работу");
         System.out.println("Введите \"register\" [login] - если вы не зарегестрированы. \n" +
                 "Введите \"sign_in\" [login] - если зарегестрированы");
-        socket = new Socket(ADDRESS, PORT);
+        try {
+            socket = new Socket(ADDRESS, PORT);
+        } catch (ConnectException e) {
+            System.out.println("Сервер не запущен");
+            System.exit(0);
+        }
+
         dataInputStream = new DataInputStream(socket.getInputStream());
 
 

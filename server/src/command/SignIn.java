@@ -13,14 +13,14 @@ public class SignIn {
     public String run (Message message) {
         if (movieCollectionManager.isLoginUsed(message)) {
             if (movieCollectionManager.doesPasswordMatch(message)) {
-                Iterator<Map.Entry<Integer,String>> iter = Server.connectedUsers.entrySet().iterator();
+                /*Iterator<Map.Entry<Integer,String>> iter = Server.connectedUsers.entrySet().iterator();
                 while (iter.hasNext()) {
                     Map.Entry<Integer,String> entry = iter.next();
                     if(message.getUser().getLogin().equalsIgnoreCase(entry.getValue())){
                         return "Сессия этого пользователя уже занята";
                     }
                 }
-                Server.connectedUsers.replace(SocketThread.socketName, " ", message.getUser().getLogin());
+                Server.connectedUsers.replace(SocketThread.socketName, " ", message.getUser().getLogin());*/
                 return "Вы успешно авторизованы";
             } else {
                 return "Введен неверный пароль";
